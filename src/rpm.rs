@@ -1,14 +1,14 @@
-use nom;
 
-use cpio;
 
-use md5;
+
+
+
 use nom::bytes::complete;
 use nom::number::complete::{be_i16, be_i32, be_i64, be_i8, be_u16, be_u32, be_u8};
-use num;
 
-use sha1;
-use sha2;
+
+
+
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryInto;
@@ -68,7 +68,7 @@ impl RPMPackage {
     #[cfg(feature = "signing-meta")]
     pub fn sign<S>(&mut self, secret_key: &[u8]) -> Result<(), RPMError>
     where
-        S: crypto::Signing<crypto::RSA_SHA256, Signature = Vec<u8>> + crypto::LoaderPkcs8,
+        S: crypto::Signing<crypto::RSA, Signature = Vec<u8>> + crypto::KeyLoader,
     {
         // create a temporary byte repr of the header
         // and re-create all hashes
@@ -87,7 +87,7 @@ impl RPMPackage {
         let digest_sha1 = sha1::Sha1::from(&header_bytes);
         let digest_sha1 = digest_sha1.digest();
 
-        let signer = S::load_from_pkcs8(secret_key)?;
+        let signer = S::load_from(secret_key)?;
 
         // TODO verify the byte range is correct!
         let signature_header = signer.sign(self.content.as_slice())?;
@@ -116,9 +116,9 @@ impl RPMPackage {
 
     /// verify the signature as present
     #[cfg(feature = "signing-meta")]
-    pub fn verify_signature<V>(&mut self, public_key: &[u8]) -> Result<(), RPMError>
+    pub fn verify_signature<V>(&self, public_key: &[u8]) -> Result<(), RPMError>
     where
-        V: crypto::Verifying<crypto::RSA_SHA256, Signature = Vec<u8>> + crypto::LoaderPkcs8,
+        V: crypto::Verifying<crypto::RSA, Signature = Vec<u8>> + crypto::KeyLoader,
     {
         // TODO retval should be SIGNATURE_VERIFIED or MISMATCH, not just an error
         // find metadata signature
@@ -126,7 +126,7 @@ impl RPMPackage {
         let signature_header = raw_signature_from_rfc4880(signature_header.store.as_slice())
             .map_err(|_e| RPMError::new("Failed to parse rfc4880 signature"))?;
 
-        let verifier = V::load_from_pkcs8(public_key)?;
+        let verifier = V::load_from(public_key)?;
         verifier.verify(self.content.as_slice(), signature_header.as_slice())
     }
 }
@@ -859,7 +859,7 @@ impl IndexData {
     fn int(&self) -> Option<i32> {
         match self {
             IndexData::Int32(s) => {
-                if s.len() > 0 {
+                if !s.is_empty() {
                     Some(s[0])
                 } else {
                     None
@@ -968,9 +968,9 @@ impl Dependency {
 }
 
 const RPMSENSE_ANY: u32 = 0;
-const RPMSENSE_LESS: u32 = (1 << 1);
-const RPMSENSE_GREATER: u32 = (1 << 2);
-const RPMSENSE_EQUAL: u32 = (1 << 3);
+const RPMSENSE_LESS: u32 = 1 << 1;
+const RPMSENSE_GREATER: u32 = 1 << 2;
+const RPMSENSE_EQUAL: u32 = 1 << 3;
 
 // there is no use yet for those constants. But they are part of the official package
 // so I will leave them in in case we need them later.
@@ -1040,7 +1040,7 @@ impl RPMFileOptions {
                 user: "root".to_string(),
                 group: "root".to_string(),
                 symlink: "".to_string(),
-                mode: 0o100664,
+                mode: 0o100_664,
                 flag: 0,
                 inherit_permissions: true,
             },
@@ -1230,10 +1230,8 @@ impl RPMBuilder {
         let mut content = Vec::new();
         input.read_to_end(&mut content)?;
         let mut options = options.into();
-        if options.inherit_permissions {
-            if cfg!(unix) {
-                options.mode = input.metadata()?.permissions().mode() as i32;
-            }
+        if options.inherit_permissions && cfg!(unix) {
+            options.mode = input.metadata()?.permissions().mode() as i32;
         }
         self.add_data(
             content,
@@ -1255,7 +1253,7 @@ impl RPMBuilder {
         options: RPMFileOptions,
     ) -> Result<(), RPMError> {
         let dest = options.destination;
-        if !dest.starts_with("./") && !dest.starts_with("/") {
+        if !dest.starts_with("./") && !dest.starts_with('/') {
             return Err(RPMError::new(&format!(
                 "invalid path {} - needs to start with / or ./",
                 dest
@@ -1267,7 +1265,7 @@ impl RPMBuilder {
         let parent = pb
             .parent()
             .ok_or_else(|| RPMError::new(&format!("invalid destination path {}", dest)))?;
-        let (cpio_path, dir) = if dest.starts_with(".") {
+        let (cpio_path, dir) = if dest.starts_with('.') {
             (
                 dest.to_string(),
                 format!("/{}/", parent.strip_prefix(".").unwrap().to_string_lossy()),
@@ -1351,10 +1349,18 @@ impl RPMBuilder {
     ///
     /// ignores a present key, if any
     pub fn build(self) -> Result<RPMPackage, RPMError> {
-        let (lead, header, content) = self.prepare_data()?;
+        let (lead, header_idx_tag, content) = self.prepare_data()?;
 
-        let (header_len, header_digest_sha1, header_and_content_len, header_and_content_digest_md5) =
-            Self::derive_hashes(&header, content.as_slice())?;
+        let mut header = Vec::with_capacity(128);
+        header_idx_tag.write(&mut header)?;
+        let header = header;
+
+        let (
+            _header_len,
+            header_digest_sha1,
+            header_and_content_len,
+            header_and_content_digest_md5,
+        ) = Self::derive_hashes(header.as_slice(), content.as_slice())?;
 
         let digest_header = Header::<IndexSignatureTag>::builder()
             .add_digest(
@@ -1366,7 +1372,7 @@ impl RPMBuilder {
         let metadata = RPMPackageMetadata {
             lead,
             signature: digest_header,
-            header,
+            header: header_idx_tag,
         };
         let pkg = RPMPackage { metadata, content };
         Ok(pkg)
@@ -1379,9 +1385,9 @@ impl RPMBuilder {
     #[cfg(feature = "signing-meta")]
     pub fn build_and_sign<S>(self, signing_key: &[u8]) -> Result<RPMPackage, RPMError>
     where
-        S: crypto::Signing<crate::crypto::RSA_SHA256> + crypto::LoaderPkcs8,
+        S: crypto::Signing<crate::crypto::RSA> + crypto::KeyLoader,
     {
-        let signer = <S as crate::crypto::LoaderPkcs8>::load_from_pkcs8(signing_key)?;
+        let signer = <S as crate::crypto::KeyLoader>::load_from(signing_key)?;
         self.build_with_external_signer::<S>(&signer)
     }
 
@@ -1391,12 +1397,20 @@ impl RPMBuilder {
     #[cfg(feature = "signing-meta")]
     pub fn build_with_external_signer<S>(self, signer: &S) -> Result<RPMPackage, RPMError>
     where
-        S: crypto::Signing<crate::crypto::RSA_SHA256>,
+        S: crypto::Signing<crate::crypto::RSA>,
     {
-        let (lead, header, content) = self.prepare_data()?;
+        let (lead, header_idx_tag, content) = self.prepare_data()?;
 
-        let (header_len, header_digest_sha1, header_and_content_len, header_and_content_digest_md5) =
-            Self::derive_hashes(&header, content.as_slice())?;
+        let mut header = Vec::with_capacity(128);
+        header_idx_tag.write(&mut header)?;
+        let header = header;
+
+        let (
+            _header_len,
+            header_digest_sha1,
+            header_and_content_len,
+            header_and_content_digest_md5,
+        ) = Self::derive_hashes(header.as_slice(), content.as_slice())?;
 
         let builder = Header::<IndexSignatureTag>::builder().add_digest(
             header_digest_sha1.as_str(),
@@ -1404,17 +1418,16 @@ impl RPMBuilder {
         );
 
         let signature_header = {
-            let rsa_sig_header_only =
-                signer
-                    .sign(dbg!(header_digest_sha1.as_bytes()))
-                    .map_err(|_e| {
-                        dbg!(_e);
-                        RPMError::new("Failed to create signature based on header sha1")
-                    })?;
+            let rsa_sig_header_only = signer.sign(header.as_slice()).map_err(|_e| {
+                dbg!(_e);
+                RPMError::new("Failed to create signature based on header sha1")
+            })?;
 
-            let rsa_sig_header_and_archive = signer
-                .sign(dbg!(&header_and_content_digest_md5))
-                .map_err(|_e| {
+            let mut concatenated = Vec::with_capacity(header.len() + content.len());
+            concatenated.extend(header.as_slice());
+            concatenated.extend(content.as_slice());
+            let rsa_sig_header_and_archive =
+                signer.sign(concatenated.as_slice()).map_err(|_e| {
                     dbg!(_e);
                     RPMError::new("Failed to create signature based on header md5")
                 })?;
@@ -1430,7 +1443,7 @@ impl RPMBuilder {
         let metadata = RPMPackageMetadata {
             lead,
             signature: signature_header,
-            header,
+            header: header_idx_tag,
         };
         let pkg = RPMPackage { metadata, content };
         Ok(pkg)
@@ -1438,28 +1451,25 @@ impl RPMBuilder {
 
     /// use prepared data but make sure the signatures are
     fn derive_hashes(
-        header: &Header<IndexTag>,
+        header: &[u8],
         content: &[u8],
     ) -> Result<(usize, String, usize, Vec<u8>), RPMError> {
-        let mut header_bytes = Vec::new();
-        header.write(&mut header_bytes)?;
-
         // accross header index and content (compressed or uncompressed, depends on configuration)
         let mut hasher = md5::Md5::default();
-        hasher.input(&header_bytes);
+        hasher.input(&header);
         hasher.input(&content);
         let digest_md5 = hasher.result();
         let digest_md5 = digest_md5.as_slice();
 
         // header only, not the lead, just the header index
-        let digest_sha1 = sha1::Sha1::from(&header_bytes);
+        let digest_sha1 = sha1::Sha1::from(&header);
         let digest_sha1 = digest_sha1.digest();
         let digest_sha1 = digest_sha1.to_string();
 
         Ok((
-            header_bytes.len(),
+            header.len(),
             digest_sha1,
-            header_bytes.len() + content.len(),
+            header.len() + content.len(),
             digest_md5.to_vec(),
         ))
     }
@@ -1964,3 +1974,6 @@ mod tests2 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_validate;

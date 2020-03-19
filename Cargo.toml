@@ -42,7 +42,8 @@ simple_asn1 = { version = "0.4", optional = true }
 rand = { version = "0.7" }
 lazy_static = "1"
 ring = { version = "0.16", features = ["alloc", "std"], optional = true }
-
+pgp = { version = "0.5", optional = true }
+chrono = "0.4"
 
 [dev-dependencies]
 rsa = { version = "^0.2.0" }
@@ -50,7 +51,7 @@ rsa-der = { version = "^0.2.1" }
 
 [features]
 default = ["signing-ring"]
-all = ["signing-ring", "signing-shrapnel", "test-with-podman"]
+all = ["signing-ring", "signing-shrapnel", "signing-pgp", "test-with-podman"]
 signing-ring = ["signing-meta", "ring"]
 signing-shrapnel = [
     "signing-meta",
@@ -59,8 +60,9 @@ signing-shrapnel = [
     "num-bigint-dig",
     "sloppy-rfc4880",
 ]
+signing-pgp = ["signing-meta", "pgp"]
 signing-meta = ["simple_asn1", "pem"]
-test-with-podman = ["signing-ring"]
+test-with-podman = ["signing-meta"]
 
 [patch.crates-io]
 rsa-der = { git = "https://github.com/drahnr/rsa-der.git" }

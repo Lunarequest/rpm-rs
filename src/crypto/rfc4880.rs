@@ -4,7 +4,7 @@
 //!
 
 use crate::errors::RPMError;
-use ::sha2::{Digest, Sha256};
+use ::sha2::Digest;
 use ::simple_asn1::{self, oid, ASN1Block, BigUint, OID};
 
 /// signature bytes with signature type annotation
@@ -25,6 +25,14 @@ impl SignatureDigest {
             _ => unreachable!("unknown variant"),
         }
     }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        match self {
+            Self::Sha256(v) => v,
+            Self::MD5(v) => v,
+            Self::Sha1(v) => v,
+        }
+    }
 }
 
 /// RFC4880 encoded signature
@@ -33,6 +41,10 @@ pub struct Rfc4880(Vec<u8>);
 impl Rfc4880 {
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
     }
 }
 
@@ -51,7 +63,7 @@ impl Rfc4880 {
 pub fn raw_signature_to_rfc4880(digest: &[u8]) -> Result<Rfc4880, RPMError> {
     // TODO just use rsa::Hash::MD5.asn1_prefix()
     let sha256_oid = oid!(2, 16, 840, 1, 101, 3, 4, 2, 1);
-    let _md5_oid = oid!(1, 2, 840, 113549, 2, 5);
+    let _md5_oid = oid!(1, 2, 840, 113_549, 2, 5);
     let _sha1_oid = oid!(1, 3, 14, 3, 2, 26);
 
     let digest_algorithm = ASN1Block::ObjectIdentifier(0, sha256_oid);
@@ -77,23 +89,23 @@ pub fn raw_signature_to_rfc4880(digest: &[u8]) -> Result<Rfc4880, RPMError> {
 // RFC-4880 section 13.1 and 5.2.2
 pub(crate) fn raw_signature_from_rfc4880(rfc4880_data: &[u8]) -> Result<SignatureDigest, RPMError> {
     if rfc4880_data.len() < 11 {
-        Err(RPMError::new("Message too short"))?;
+        return Err(RPMError::new("Message too short"));
     }
     if rfc4880_data[0] != 0x00 {
-        Err(RPMError::new("byte 0 must be 0x00"))?;
+        return Err(RPMError::new("byte 0 must be 0x00"));
     }
     if rfc4880_data[1] != 0x01 {
-        Err(RPMError::new("byte 1 must be 0x01"))?;
+        return Err(RPMError::new("byte 1 must be 0x01"));
     }
     let mut offset = 2;
     while offset < rfc4880_data.len() && rfc4880_data[offset] == 0xFF {
         offset += 1;
     }
     if offset < 10 {
-        Err(RPMError::new("must contain at least 8 0xFF bytes"))?;
+        return Err(RPMError::new("must contain at least 8 0xFF bytes"));
     }
     if rfc4880_data[offset] != 0x00 {
-        Err(RPMError::new("byte n must be 0x00"))?;
+        return Err(RPMError::new("byte n must be 0x00"));
     }
 
     println!("pre-amble {:#X?}", &rfc4880_data[..=offset]);
@@ -121,7 +133,7 @@ pub(crate) fn raw_signature_from_rfc4880(rfc4880_data: &[u8]) -> Result<Signatur
             }?
             .clone();
 
-            let _digest_algorithm = match &blocks[0] {
+            match &blocks[0] {
                 ASN1Block::ObjectIdentifier(_, oid) => {
                     // utilize rsa::hash::Hash::SHA256.asn1_prefix()
                     return match oid {
@@ -142,7 +154,7 @@ use lazy_static::lazy_static;
 
 pub(crate) fn md5_oid() -> &'static simple_asn1::OID {
     lazy_static! {
-        static ref MD5_OID: simple_asn1::OID = oid!(1, 2, 840, 113549, 2, 5);
+        static ref MD5_OID: simple_asn1::OID = oid!(1, 2, 840, 113_549, 2, 5);
     }
     &MD5_OID
 }
@@ -162,11 +174,26 @@ pub(crate) fn sha256_oid() -> &'static simple_asn1::OID {
 }
 
 #[cfg(all(test, feature = "signing-meta"))]
-mod test {
-    use super::*;
-
+pub(crate) fn gen_rfc4880() -> Result<(Rfc4880, Vec<u8>), RPMError> {
     use rand::{thread_rng, Rng};
     use sha2::Sha256;
+
+    let mut rng = thread_rng();
+    let mut data = vec![0u8; 500];
+    rng.fill(&mut data[..]);
+
+    let mut hasher = Sha256::new();
+    hasher.input(&data[..]);
+    let digest = hasher.result();
+    let digest: Vec<u8> = digest.as_slice().to_vec();
+    let encoded = raw_signature_to_rfc4880(&digest[..])?;
+
+    Ok((encoded, digest))
+}
+
+#[cfg(all(test, feature = "signing-meta"))]
+mod test {
+    use super::*;
 
     /// equality check for static lookup from `rsa::hash::Hash` vs oid!() macro
     ///
@@ -207,21 +234,9 @@ mod test {
         check(md5_oid(), Hashes::MD5);
     }
 
-    use crate::crypto::{LoaderPkcs8, Signing, Verifying};
-
     #[test]
     fn rfc4880_roundtrip() {
-        let mut rng = thread_rng();
-        let mut data = vec![0u8; 500];
-        rng.fill(&mut data[..]);
-
-        let mut hasher = Sha256::new();
-        hasher.input(&data[..]);
-        let digest = hasher.result();
-
-        println!("orig digest {:#X?}", &digest[..]);
-        let encoded = raw_signature_to_rfc4880(&digest[..]).expect("Failed to encode rfc4880");
-        println!("encoded {:#X?}", encoded.as_slice());
+        let (encoded, digest) = super::gen_rfc4880().expect("Gen ref rfc4880");
         let recovered_digest =
             raw_signature_from_rfc4880(encoded.as_slice()).expect("Failed to decode rfc4880");
         // println!("recov digest {:#X?}", &recovered_digest[..]);

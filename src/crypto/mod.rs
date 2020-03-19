@@ -4,8 +4,8 @@ pub use self::traits::*;
 #[cfg(feature = "signing-ring")]
 pub mod ring;
 
-#[cfg(feature = "signing-shrapnel")]
-pub mod shrapnel;
+#[cfg(feature = "signing-pgp")]
+pub mod pgp;
 
 mod rfc4880;
 
@@ -38,3 +38,7 @@ pub use rfc4880::*;
 //             .map_err(|_e| RPMError::new("Failed to parse PEM"))
 //     }
 // }
+
+pub(crate) fn echo_signature(scope: &str, signature: &[u8]) {
+    println!("{}: [len={}] {:#02x?}", scope, signature.len(), signature);
+}
