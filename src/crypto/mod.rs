@@ -1,16 +1,15 @@
-
-
-
-
 mod traits;
 pub use self::traits::*;
 
-#[cfg(feature="signing-ring")]
+#[cfg(feature = "signing-ring")]
 pub mod ring;
 
-#[cfg(feature="signing-shrapnel")]
+#[cfg(feature = "signing-shrapnel")]
 pub mod shrapnel;
 
+mod rfc4880;
+
+pub use rfc4880::*;
 
 // use pem;
 
@@ -20,7 +19,7 @@ pub mod shrapnel;
 //             .map_err(|_e| RPMError::new("Failed to parse secret pem key"))?;
 //         let _ = dbg!(pem_obj.tag);
 //         Self::from_der(tag, &x.contents[..])
-        
+
 //         pem_obj.encode()
 //         let _ = pem_obj.tag;
 //         Self::from_der(tag, &x.contents[..])

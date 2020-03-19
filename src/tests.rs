@@ -247,24 +247,14 @@ fn test_header() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(feature = "test_with_podman")]
+#[cfg(feature = "test-with-podman")]
 #[test]
 fn test_builder() -> Result<(), Box<dyn std::error::Error>> {
     use rand::rngs::OsRng;
     use rsa::{PaddingScheme, PublicKey, RSAPrivateKey};
     use rsa_der;
 
-    let mut rng = OsRng;
-    let bits = 2048;
-    let gpg_signing_key = RSAPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
-
-    let gpg_signing_key = rsa_der::private_key_to_der(
-        gpg_signing_key.n().to_bytes_be().as_slice(),
-        gpg_signing_key.e().to_bytes_be().as_slice(),
-        gpg_signing_key.d().to_bytes_be().as_slice(),
-        gpg_signing_key.primes()[0].to_bytes_be().as_slice(),
-        gpg_signing_key.primes()[1].to_bytes_be().as_slice(),
-    );
+    let (gpg_signing_key, _) = crate::signature::test::load_pkcs8_keys();
 
     let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut cargo_file = d.clone();
@@ -310,8 +300,7 @@ fn test_builder() -> Result<(), Box<dyn std::error::Error>> {
         .add_changelog_entry("me", "was awesome, eh?", 123123123)
         .add_changelog_entry("you", "yeah, it was", 12312312)
         // .requires(Dependency::any("wget".to_string()))
-        .sign_with(&gpg_signing_key[..])
-        .build()?;
+        .build_and_sign::<crypto::ring::Signer>(gpg_signing_key.as_slice())?;
 
     pkg.write(&mut f)?;
     let epoch = pkg.metadata.header.get_epoch()?;
@@ -344,9 +333,13 @@ fn test_builder() -> Result<(), Box<dyn std::error::Error>> {
     let mapping = format!("{}:/out:z", d.to_str().unwrap());
 
     [
-        ("scratch", &rpm_sig_check as &dyn Fn() -> Vec<&'static str>),
+        (
+            "fedora:31",
+            &rpm_sig_check as &dyn Fn() -> Vec<&'static str>,
+        ),
         ("fedora:30", &yum_cmd as &dyn Fn() -> Vec<&'static str>),
         ("fedora:31", &dnf_cmd as &dyn Fn() -> Vec<&'static str>),
+        ("centos:8", &yum_cmd as &dyn Fn() -> Vec<&'static str>),
         ("centos:7", &yum_cmd as &dyn Fn() -> Vec<&'static str>),
     ]
     .iter()
@@ -361,7 +354,7 @@ fn test_builder() -> Result<(), Box<dyn std::error::Error>> {
     .try_for_each(|handle| {
         handle.and_then(|mut handle| {
             let status = handle.wait()?;
-            assert!(status.success());
+            assert!(dbg!(status.success()));
             Ok(())
         })
     })
