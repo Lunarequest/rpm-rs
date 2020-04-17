@@ -52,7 +52,7 @@ rsa-der = { version = "^0.2.1" }
 [features]
 default = ["signing-ring"]
 all = ["signing-ring", "signing-shrapnel", "signing-pgp", "test-with-podman"]
-signing-ring = ["signing-meta", "ring"]
+signing-ring = ["signing-meta", "ring", "sloppy-rfc4880"]
 signing-shrapnel = [
     "signing-meta",
     "rsa",

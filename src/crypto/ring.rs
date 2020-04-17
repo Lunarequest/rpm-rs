@@ -33,7 +33,7 @@ impl crypto::Signing<crypto::RSA> for Signer {
     }
 }
 
-impl crypto::KeyLoader for Signer {
+impl crypto::KeyLoader<crypto::key::Secret> for Signer {
     fn load_from(bytes: &[u8]) -> Result<Self, RPMError> {
         let secret_signing_key = risig::RsaKeyPair::from_pkcs8(&bytes)
             .map_err(|e| format!("Failed  to load RSA keypair: {}", e))?;
@@ -67,7 +67,7 @@ impl crypto::Verifying<crypto::RSA> for Verifier {
     }
 }
 
-impl crypto::KeyLoader for Verifier {
+impl crypto::KeyLoader<crypto::key::Public> for Verifier {
     /// load the private key for signing
     fn load_from(bytes: &[u8]) -> Result<Self, RPMError> {
         // TODO not so pretty, need to validate here

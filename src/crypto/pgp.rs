@@ -4,8 +4,7 @@ use super::*;
 
 use crate::errors::RPMError;
 
-use sha2;
-use sha2::Digest;
+use pem;
 
 use ::pgp::composed::Deserializable;
 use ::pgp::crypto::hash::HashAlgorithm;
@@ -21,13 +20,9 @@ pub struct Signer {
     secret_key: ::pgp::composed::signed_key::SignedSecretKey,
 }
 
-impl crypto::Signing<crypto::RSA> for Signer {
+impl crypto::Signing<crypto::algorithm::RSA> for Signer {
     type Signature = Vec<u8>;
     fn sign(&self, data: &[u8]) -> Result<Self::Signature, RPMError> {
-        // let mut hasher = sha2::Sha256::default();
-        // hasher.input(data);
-        // let digest = hasher.result();
-
         let passwd_fn = || String::new();
 
         let mut sig_cfg_bldr = ::pgp::packet::SignatureConfigBuilder::default();
@@ -61,7 +56,7 @@ impl crypto::Signing<crypto::RSA> for Signer {
     }
 }
 
-impl crypto::KeyLoader for Signer {
+impl crypto::KeyLoader<crypto::key::Secret> for Signer {
     /// load the private key for signing
     fn load_from(bytes: &[u8]) -> Result<Self, RPMError> {
         let input = ::std::str::from_utf8(bytes).expect("failed to convert to string");
@@ -78,7 +73,7 @@ pub struct Verifier {
     public_key: ::pgp::composed::signed_key::SignedPublicKey,
 }
 
-impl crypto::Verifying<crypto::RSA> for Verifier {
+impl crypto::Verifying<crypto::algorithm::RSA> for Verifier {
     type Signature = Vec<u8>;
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), RPMError> {
         echo_signature("verify(pgp)", signature);
@@ -95,8 +90,8 @@ impl crypto::Verifying<crypto::RSA> for Verifier {
     }
 }
 
-impl crypto::KeyLoader for Verifier {
-    fn load_from(bytes: &[u8]) -> Result<Self, RPMError> {
+impl crypto::KeyLoader<crypto::key::Public> for Verifier {
+    fn load_from_asc(bytes: &[u8]) -> Result<Self, RPMError> {
         // let cursor = std::io::Cursor::new(bytes);
         // let public_key = ::pgp::composed::signed_key::SignedPublicKey::from_bytes(cursor)
         let input = ::std::str::from_utf8(bytes).expect("failed to convert to string");
@@ -105,6 +100,23 @@ impl crypto::KeyLoader for Verifier {
 
         Ok(Self { public_key })
     }
+
+    fn load_from_pkcs8_der(bytes: &u8) -> Result<Self, RPMError> {
+        let (n, e, d, p, q) = rsa_der::private_key_from_der(bytes)
+            .map_err(|_e| RPMError::new("Failed to parse secret inner der formatted key"))?;
+        let secret_key = rsa::RSAPrivateKey::from_components(
+            num_bigint_dig::BigUint::from_bytes_be(n.as_slice()),
+            num_bigint_dig::BigUint::from_bytes_be(e.as_slice()),
+            num_bigint_dig::BigUint::from_bytes_be(d.as_slice()),
+            vec![
+                num_bigint_dig::BigUint::from_bytes_be(p.as_slice()),
+                num_bigint_dig::BigUint::from_bytes_be(q.as_slice()),
+            ],
+        );
+        ::pgp::
+
+        Ok(Self { secret_key })
+    }
 }
 
 #[cfg(test)]
@@ -112,7 +124,6 @@ mod test {
 
     use crate::crypto::{Algorithm, KeyLoader, Signing, Verifying, RSA};
     use crate::errors::RPMError;
-    // use ::pem;
 
     use crate::signature::test::{load_asc_keys, load_pem_keys, roundtrip_sign_verify};
 
@@ -135,24 +146,21 @@ mod test {
         assert!(Verifier::load_from(verification_key.as_ref()).is_ok());
     }
 
-    #[test]
-    fn ref_sign_verify_round() {
-        let (rfc4880, raw) =
-            crate::crypto::gen_rfc4880().expect("Failed to generated rfc4880 ref package");
-        let signature =
-            ::pgp::packet::Signature::from_slice(::pgp::types::Version::Old, rfc4880.as_slice())
-                .or_else(|e| {
-                    ::pgp::packet::Signature::from_slice(
-                        ::pgp::types::Version::New,
-                        rfc4880.as_slice(),
-                    )
-                })
-                .map_err(|e| format!("Failed to read signature: {:?}", e))
-                .expect("Failed parse ref rfc4880");
-    }
-
-    #[test]
-    fn signature_check_roundtrip_cross2() {}
+    // #[test]
+    // fn ref_sign_verify_round() {
+    //     let (rfc4880, raw) =
+    //         crate::crypto::gen_rfc4880().expect("Failed to generated rfc4880 ref package");
+    //     let signature =
+    //         ::pgp::packet::Signature::from_slice(::pgp::types::Version::Old, rfc4880.as_slice())
+    //             .or_else(|e| {
+    //                 ::pgp::packet::Signature::from_slice(
+    //                     ::pgp::types::Version::New,
+    //                     rfc4880.as_slice(),
+    //                 )
+    //             })
+    //             .map_err(|e| format!("Failed to read signature: {:?}", e))
+    //             .expect("Failed parse ref rfc4880");
+    // }
 
     #[test]
     fn sign_verify_round() {
