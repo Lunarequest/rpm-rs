@@ -48,3 +48,7 @@ default = ["signature-pgp"]
 signature-pgp = ["signature-meta", "pgp"]
 signature-meta = []
 test-with-podman = ["signature-meta"]
+
+
+[patch.crates-io]
+pgp = { git = "https://github.com/drahnr/rpgp", branch="master" }

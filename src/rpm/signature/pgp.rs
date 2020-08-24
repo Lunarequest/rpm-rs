@@ -28,7 +28,7 @@ impl traits::Signing<traits::algorithm::RSA> for Signer {
     /// Despite the fact the API suggest zero copy pattern,
     /// it internally creates a copy until crate `pgp` provides
     /// a `Read` based implementation.
-    fn sign<R: Read>(&self, mut data: R) -> Result<Self::Signature, RPMError> {
+    fn sign<R: Read>(&self, data: R) -> Result<Self::Signature, RPMError> {
         let passwd_fn = || String::new();
 
         let now = now();
@@ -48,13 +48,8 @@ impl traits::Signing<traits::algorithm::RSA> for Signer {
             ]) // must be initialized
             .build()?;
 
-        // currently the copy is necessary due to a lack of API allowing
-        // something `std::io::Read` based: https://github.com/rpgp/rpgp/issues/99
-        let mut buf = Vec::with_capacity(16384);
-        let _ = data.read_to_end(&mut buf)?;
-
         let signature_packet = sig_cfg
-            .sign(&self.secret_key, passwd_fn, buf.as_slice())
+            .sign(&self.secret_key, passwd_fn, data)
             .map_err(|e| format!("eee: {:?}", e))?;
 
         let mut signature_bytes = Vec::with_capacity(1024);
@@ -123,17 +118,11 @@ impl traits::Verifying<traits::algorithm::RSA> for Verifier {
 
         log::debug!("Signature issued by: {:?}", signature.issuer());
 
-        // currently the copy is necessary due to a lack of API allowing
-        // something `std::io::Read` based: https://github.com/rpgp/rpgp/issues/99
-        let mut buf = Vec::with_capacity(16384);
-        let _ = data.read_to_end(&mut buf)?;
-        let buf = &buf[..];
-
         if let Some(key_id) = signature.issuer() {
             log::trace!("Signature has issuer ref: {:?}", key_id);
 
             if self.public_key.key_id() == *key_id {
-                return signature.verify(&self.public_key, buf).map_err(|e| {
+                return signature.verify(&self.public_key, data).map_err(|e| {
                     RPMError::from(format!("Failed to verify with primary key: {:?}", e))
                 });
             } else {
@@ -168,7 +157,7 @@ impl traits::Verifying<traits::algorithm::RSA> for Verifier {
                     |previous_res, sub_key| {
                         if previous_res.is_err() {
                             log::trace!("Test next candidate subkey");
-                            signature.verify(sub_key, buf).map_err(|e| {
+                            signature.verify(sub_key, &mut data).map_err(|e| {
                                 RPMError::from(format!(
                                     "Failed to verify with subkey {:?}: {:?}",
                                     sub_key.key_id(),
@@ -187,7 +176,7 @@ impl traits::Verifying<traits::algorithm::RSA> for Verifier {
                 self.public_key.primary_key.key_id()
             );
             signature
-                .verify(&self.public_key, buf)
+                .verify(&self.public_key, data)
                 .map_err(|e| RPMError::from(format!("Failed to verify: {:?}", e)))
         }
     }
