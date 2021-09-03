@@ -22,6 +22,16 @@ use crate::signature;
 use crate::RPMPackage;
 use crate::RPMPackageMetadata;
 
+#[cfg(unix)]
+fn file_mode(file: &std::fs::File) -> Result<u32, RPMError> {
+    Ok(file.metadata()?.permissions().mode())
+}
+
+#[cfg(windows)]
+fn file_mode(_file: &std::fs::File) -> Result<u32, RPMError> {
+    Ok(0)
+}
+
 /// Builder pattern for a full rpm file.
 ///
 /// Prefered method of creating a rpm file.
@@ -39,8 +49,8 @@ pub struct RPMBuilder {
     // File entries need to be sorted. The entries need to be in the same order as they come
     // in the cpio payload. Otherwise rpm will not be able to resolve those paths.
     // key is the directory, values are complete paths
-    files: std::collections::BTreeMap<String, RPMFileEntry>,
-    directories: std::collections::BTreeSet<String>,
+    files: BTreeMap<String, RPMFileEntry>,
+    directories: BTreeSet<String>,
     requires: Vec<Dependency>,
     obsoletes: Vec<Dependency>,
     provides: Vec<Dependency>,
@@ -116,8 +126,8 @@ impl RPMBuilder {
         let mut content = Vec::new();
         input.read_to_end(&mut content)?;
         let mut options = options.into();
-        if options.inherit_permissions && cfg!(unix) {
-            options.mode = input.metadata()?.permissions().mode() as i32;
+        if options.inherit_permissions {
+            options.mode = file_mode(&input)? as i32;
         }
         self.add_data(
             content,
@@ -169,7 +179,7 @@ impl RPMBuilder {
         let mut hasher = sha2::Sha256::default();
         hasher.update(&content);
         let hash_result = hasher.finalize();
-        let sha_checksum = format!("{:x}", hash_result);
+        let sha_checksum = hex::encode(hash_result); // encode as string
         let entry = RPMFileEntry {
             base_name: pb.file_name().unwrap().to_string_lossy().to_string(),
             size: content.len() as i32,
@@ -209,8 +219,8 @@ impl RPMBuilder {
         self
     }
 
-    pub fn release(mut self, release: u16) -> Self {
-        self.release = format!("{}", release);
+    pub fn release<T: ToString>(mut self, release: T) -> Self {
+        self.release = release.to_string();
         self
     }
 
